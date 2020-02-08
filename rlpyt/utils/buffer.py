@@ -45,12 +45,58 @@ def build_array(example, leading_dims, share_memory=False):
     return constructor(shape=leading_dims + a.shape, dtype=a.dtype)
 
 
-def np_mp_array(shape, dtype):
-    """Allocate a numpy array on OS shared memory."""
-    size = int(np.prod(shape))
-    nbytes = size * np.dtype(dtype).itemsize
-    mp_array = mp.RawArray(ctypes.c_char, nbytes)
-    return np.frombuffer(mp_array, dtype=dtype, count=size).reshape(shape)
+class np_mp_array(np.ndarray):
+    """ndarray which can be shared between `multiprocessing` processes by
+    passing it to a `Process` init function (or similar). Note that this can
+    only be shared _on process startup_; it can't be passed through, e.g., a
+    queue at runtime. Also it cannot be pickled outside of multiprocessing's
+    internals."""
+    _shmem = None
+
+    def __new__(cls, shape, dtype=None, buffer=None, offset=None, strides=None,
+                order=None):
+        # init buffer
+        if buffer is None:
+            assert offset is None
+            assert strides is None
+            size = int(np.prod(shape))
+            nbytes = size * np.dtype(dtype).itemsize
+            # this is the part that can be passed between processes
+            shmem = mp.RawArray(ctypes.c_char, nbytes)
+            offset = 0
+        elif isinstance(buffer, ctypes.Array):
+            # restoring from a pickle
+            shmem = buffer
+        else:
+            raise ValueError(
+                f"{cls.__name__} does not support specifying custom "
+                f" buffers, but was given {buffer!r}")
+
+        # init array
+        obj = np.ndarray.__new__(cls, shape, dtype=dtype, buffer=shmem,
+                                 offset=offset, strides=strides, order=order)
+        obj._shmem = shmem
+
+        return obj
+
+    def __array_finalize__(self, obj):
+        if obj is not None:
+            self._shmem = obj._shmem
+
+    def __reduce__(self):
+        # credit to https://stackoverflow.com/a/53534485 for awful/wonderful
+        # __array_interface__ hack
+        absolute_offset = self.__array_interface__['data'][0]
+        base_address = ctypes.addressof(self._shmem)
+        offset = absolute_offset - base_address
+        assert offset <= len(self._shmem), (offset, len(self._shmem))
+        order = 'FC'[self.flags['C_CONTIGUOUS']]
+        # buffer should get pickled by np
+        assert self._shmem is not None, \
+            "somehow this lost its _shmem reference"
+        newargs = (self.shape, self.dtype, self._shmem, offset, self.strides,
+                   order)
+        return (type(self), newargs)
 
 
 def torchify_buffer(buffer_):
