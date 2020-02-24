@@ -47,7 +47,9 @@ class MILBenchFfModel(AtariFfModel):
 
 def build_and_train(run_ID=0, cuda_idx=None, sample_mode="serial",
                     n_parallel=2, algo_name="a2c"):
-    affinity = dict(cuda_idx=cuda_idx, workers_cpus=list(range(n_parallel)))
+    affinity = dict(cuda_idx=cuda_idx,
+                    workers_cpus=list(range(n_parallel)),
+                    set_affinity=False)
     gpu_cpu = "CPU" if cuda_idx is None else f"GPU {cuda_idx}"
     if sample_mode == "serial":
         Sampler = SerialSampler  # (Ignores workers_cpus.)
