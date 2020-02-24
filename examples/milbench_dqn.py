@@ -5,7 +5,8 @@ import torch
 
 from rlpyt.envs.milbench import MILBenchGymEnv
 from rlpyt.samplers.parallel.gpu.sampler import GpuSampler
-from rlpyt.samplers.parallel.gpu.collectors import GpuWaitResetCollector
+# from rlpyt.samplers.parallel.gpu.collectors import GpuWaitResetCollector
+from rlpyt.samplers.parallel.gpu.collectors import GpuResetCollector
 from rlpyt.algos.dqn.dqn import DQN
 from rlpyt.models.dqn.atari_dqn_model import AtariDqnModel
 from rlpyt.agents.dqn.atari.atari_dqn_agent import AtariDqnAgent
@@ -46,7 +47,8 @@ def build_and_train(run_ID=0, cuda_idx=None, n_parallel=2):
         EnvCls=MILBenchGymEnv,
         env_kwargs=env_kwargs,
         eval_env_kwargs=env_kwargs,
-        CollectorCls=GpuWaitResetCollector,
+        # CollectorCls=GpuWaitResetCollector,
+        CollectorCls=GpuResetCollector,
         max_decorrelation_steps=0,
         eval_n_envs=10,
         eval_max_steps=int(10e3),
