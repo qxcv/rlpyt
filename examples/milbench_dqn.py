@@ -39,8 +39,8 @@ class MILBenchDqnModel(AtariDqnModel):
 
 def build_and_train(run_ID=0, cuda_idx=None, n_parallel=2):
     config = dict(
-        algo=dict(batch_size=128),
-        sampler=dict(batch_T=2, batch_B=32),
+        algo=dict(batch_size=128, double_dqn=True, discount=0.98),
+        sampler=dict(batch_T=2, batch_B=64),
     )
     env_kwargs = dict(env_name='MoveToCorner-DebugReward-AtariStyle-v0')
     sampler = GpuSampler(
