@@ -48,12 +48,23 @@ def build_array(example, leading_dims, share_memory=False):
     return constructor(shape=leading_dims + a.shape, dtype=a.dtype)
 
 
-class np_mp_array(np.ndarray):
-    """ndarray which can be shared between `multiprocessing` processes by
-    passing it to a `Process` init function (or similar). Note that this can
-    only be shared _on process startup_; it can't be passed through, e.g., a
-    queue at runtime. Also it cannot be pickled outside of multiprocessing's
-    internals."""
+def np_mp_array(shape, dtype):
+    """Allocate a numpy array on OS shared memory."""
+    if mp.get_start_method() == "spawn":
+        return np_mp_array_spawn(shape, dtype)
+    size = int(np.prod(shape))
+    nbytes = size * np.dtype(dtype).itemsize
+    mp_array = mp.RawArray(ctypes.c_char, nbytes)
+    return np.frombuffer(mp_array, dtype=dtype, count=size).reshape(shape)
+
+
+class np_mp_array_spawn(np.ndarray):
+    """Shared ndarray for use with multiprocessing's 'spawn' start method.
+
+    This array can be shared between processes by passing it to a `Process`
+    init function (or similar). Note that this can only be shared _on process
+    startup_; it can't be passed through, e.g., a queue at runtime. Also it
+    cannot be pickled outside of multiprocessing's internals."""
     _shmem = None
 
     def __new__(cls, shape, dtype=None, buffer=None, offset=None, strides=None,
