@@ -3,7 +3,7 @@ DQN applied to MILBench task.
 """
 import torch
 
-from rlpyt.envs.milbench import MILBenchGymEnv
+from rlpyt.envs.milbench import MILBenchGymEnv, MILBenchTrajInfo
 from rlpyt.samplers.parallel.gpu.sampler import GpuSampler
 # from rlpyt.samplers.parallel.gpu.collectors import GpuWaitResetCollector
 from rlpyt.samplers.parallel.gpu.collectors import GpuResetCollector
@@ -53,6 +53,7 @@ def build_and_train(run_ID=0, cuda_idx=None, n_parallel=2):
         eval_n_envs=10,
         eval_max_steps=int(10e3),
         eval_max_trajectories=5,
+        TrajInfoCls=MILBenchTrajInfo,
         # batch_T=4,  # Get from config.
         # batch_B=1,
         # More parallel environments for batched forward-pass.
@@ -72,7 +73,12 @@ def build_and_train(run_ID=0, cuda_idx=None, n_parallel=2):
     )
     name = "movetocorner_dqn"
     log_dir = name
-    with logger_context(log_dir, run_ID, name, config):
+    with logger_context(log_dir,
+                        run_ID,
+                        name,
+                        config,
+                        snapshot_mode="last",
+                        override_prefix=True):
         runner.train()
 
 

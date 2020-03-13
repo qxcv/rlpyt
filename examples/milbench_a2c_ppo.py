@@ -1,11 +1,12 @@
-
 """
 A2C/PPO 
 """
+import time
+
 import torch
 import torch.nn.functional as F
 
-from rlpyt.envs.milbench import MILBenchGymEnv
+from rlpyt.envs.milbench import MILBenchGymEnv, MILBenchTrajInfo
 from rlpyt.models.pg.atari_ff_model import AtariFfModel
 from rlpyt.samplers.serial.sampler import SerialSampler
 from rlpyt.samplers.parallel.cpu.sampler import CpuSampler
@@ -17,6 +18,9 @@ from rlpyt.agents.pg.atari import AtariFfAgent
 from rlpyt.runners.minibatch_rl import MinibatchRl
 from rlpyt.utils.logging.context import logger_context
 from rlpyt.utils.tensor import infer_leading_dims, restore_leading_dims
+
+ENV_NAME = 'MoveToCorner-DebugReward-AtariStyle-v0'
+FPS = 40
 
 
 class MILBenchFfModel(AtariFfModel):
@@ -45,8 +49,11 @@ class MILBenchFfModel(AtariFfModel):
         return pi, v
 
 
-def build_and_train(run_ID=0, cuda_idx=None, sample_mode="serial",
-                    n_parallel=2, algo_name="a2c"):
+def build_and_train(run_ID=0,
+                    cuda_idx=None,
+                    sample_mode="serial",
+                    n_parallel=2,
+                    algo_name="a2c"):
     affinity = dict(cuda_idx=cuda_idx,
                     workers_cpus=list(range(n_parallel)),
                     set_affinity=False)
@@ -56,22 +63,29 @@ def build_and_train(run_ID=0, cuda_idx=None, sample_mode="serial",
         print(f"Using serial sampler, {gpu_cpu} for sampling and optimizing.")
     elif sample_mode == "cpu":
         Sampler = CpuSampler
-        print(f"Using CPU parallel sampler (agent in workers), {gpu_cpu} for optimizing.")
+        print(
+            f"Using CPU parallel sampler (agent in workers), {gpu_cpu} for optimizing."
+        )
     elif sample_mode == "gpu":
         Sampler = GpuSampler
-        print(f"Using GPU parallel sampler (agent in master), {gpu_cpu} for sampling and optimizing.")
+        print(
+            f"Using GPU parallel sampler (agent in master), {gpu_cpu} for sampling and optimizing."
+        )
     elif sample_mode == "alternating":
         Sampler = AlternatingSampler
         affinity["workers_cpus"] += affinity["workers_cpus"]  # (Double list)
         affinity["alternating"] = True  # Sampler will check for this.
-        print(f"Using Alternating GPU parallel sampler, {gpu_cpu} for sampling and optimizing.")
+        print(
+            f"Using Alternating GPU parallel sampler, {gpu_cpu} for sampling and optimizing."
+        )
 
     sampler = Sampler(
         EnvCls=MILBenchGymEnv,
-        env_kwargs=dict(env_name='MoveToCorner-DebugReward-AtariStyle-v0'),
+        env_kwargs=dict(env_name=ENV_NAME),
         batch_T=5,  # 5 time-steps per sampler iteration.
         batch_B=16,  # 16 parallel environments.
-        max_decorrelation_steps=200,
+        max_decorrelation_steps=80,
+        TrajInfoCls=MILBenchTrajInfo,
     )
     if algo_name == 'a2c':
         algo = A2C()  # Run with defaults.
@@ -89,27 +103,65 @@ def build_and_train(run_ID=0, cuda_idx=None, sample_mode="serial",
     config = dict(algo_name=algo_name)
     name = f"movetocorner_{algo_name}"
     log_dir = name
-    with logger_context(log_dir, run_ID, name, config):
+    with logger_context(log_dir,
+                        run_ID,
+                        name,
+                        config,
+                        snapshot_mode="last",
+                        override_prefix=True):
         runner.train()
+
+
+def test(snapshot_path):
+    agent = AtariFfAgent(ModelCls=MILBenchFfModel)
+    loaded_pkl = torch.load(snapshot_path)
+    agent.load_state_dict(loaded_pkl['agent_state_dict'])
+    env = MILBenchGymEnv(ENV_NAME)
+    while True:
+        frame_start = time.time()
+        act_pyt, agent_info = agent.step(obs_pyt, act_pyt, rew_pyt)
+        obs_pyt, act_pyt, rew_pyt = torchify_buffer((observation, action, reward))
+        o, r, d, env_info = env.step(action[b])
+        elapsed = time.time() - frame_start
+        time.sleep(max(0, 1. / FPS - elapsed))
 
 
 if __name__ == "__main__":
     import argparse
     import multiprocessing
     multiprocessing.set_start_method('spawn')
-    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--run_ID', help='run identifier (logging)', type=int, default=0)
-    parser.add_argument('--cuda_idx', help='gpu to use ', type=int, default=None)
-    parser.add_argument('--sample_mode', help='serial or parallel sampling',
-        type=str, default='serial', choices=['serial', 'cpu', 'gpu', 'alternating'])
-    parser.add_argument('--n_parallel', help='number of sampler workers', type=int, default=2)
-    parser.add_argument(
-        '--algo', choices=('a2c', 'ppo'), help='algorithm to use', default='a2c')
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument('--run_ID',
+                        help='run identifier (logging)',
+                        type=int,
+                        default=0)
+    parser.add_argument('--cuda_idx',
+                        help='gpu to use ',
+                        type=int,
+                        default=None)
+    parser.add_argument('--sample_mode',
+                        help='serial or parallel sampling',
+                        type=str,
+                        default='serial',
+                        choices=['serial', 'cpu', 'gpu', 'alternating'])
+    parser.add_argument('--n_parallel',
+                        help='number of sampler workers',
+                        type=int,
+                        default=2)
+    parser.add_argument('--algo',
+                        choices=('a2c', 'ppo'),
+                        help='algorithm to use',
+                        default='a2c')
+    parser.add_argument('--test_pol', default=None, help='test given policy')
     args = parser.parse_args()
-    build_and_train(
-        run_ID=args.run_ID,
-        cuda_idx=args.cuda_idx,
-        sample_mode=args.sample_mode,
-        n_parallel=args.n_parallel,
-        algo_name=args.algo,
-    )
+    if args.test_pol:
+        test(snapshot_path=args.test_pol)
+    else:
+        build_and_train(
+            run_ID=args.run_ID,
+            cuda_idx=args.cuda_idx,
+            sample_mode=args.sample_mode,
+            n_parallel=args.n_parallel,
+            algo_name=args.algo,
+        )
