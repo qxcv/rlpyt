@@ -97,7 +97,7 @@ def build_and_train(run_ID=0,
         agent=agent,
         sampler=sampler,
         n_steps=50e6,
-        log_interval_steps=1e5,
+        log_interval_steps=2e4,
         affinity=affinity,
     )
     config = dict(algo_name=algo_name)
