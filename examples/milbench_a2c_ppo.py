@@ -1,8 +1,9 @@
 """
-A2C/PPO 
+A2C/PPO
 """
 import time
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -16,11 +17,14 @@ from rlpyt.algos.pg.a2c import A2C
 from rlpyt.algos.pg.ppo import PPO
 from rlpyt.agents.pg.atari import AtariFfAgent
 from rlpyt.runners.minibatch_rl import MinibatchRl
+from rlpyt.utils.buffer import (buffer_from_example, numpify_buffer,
+                                torchify_buffer)
 from rlpyt.utils.logging.context import logger_context
 from rlpyt.utils.tensor import infer_leading_dims, restore_leading_dims
 
 ENV_NAME = 'MoveToCorner-DebugReward-AtariStyle-v0'
 FPS = 40
+MAX_T = 80
 
 
 class MILBenchFfModel(AtariFfModel):
@@ -78,7 +82,6 @@ def build_and_train(run_ID=0,
         print(
             f"Using Alternating GPU parallel sampler, {gpu_cpu} for sampling and optimizing."
         )
-
     sampler = Sampler(
         EnvCls=MILBenchGymEnv,
         env_kwargs=dict(env_name=ENV_NAME),
@@ -112,18 +115,74 @@ def build_and_train(run_ID=0,
         runner.train()
 
 
-def test(snapshot_path):
-    agent = AtariFfAgent(ModelCls=MILBenchFfModel)
-    loaded_pkl = torch.load(snapshot_path)
-    agent.load_state_dict(loaded_pkl['agent_state_dict'])
+def test(snapshot_path, cuda_idx):
     env = MILBenchGymEnv(ENV_NAME)
-    while True:
-        frame_start = time.time()
-        act_pyt, agent_info = agent.step(obs_pyt, act_pyt, rew_pyt)
-        obs_pyt, act_pyt, rew_pyt = torchify_buffer((observation, action, reward))
-        o, r, d, env_info = env.step(action[b])
-        elapsed = time.time() - frame_start
-        time.sleep(max(0, 1. / FPS - elapsed))
+    agent = AtariFfAgent(ModelCls=MILBenchFfModel)
+    agent.initialize(env.spaces)
+    loaded_pkl = torch.load(snapshot_path, map_location=torch.device('cpu'))
+    agent.load_state_dict(loaded_pkl['agent_state_dict'])
+    # TODO: CUDA support for policy, somehow
+    try:
+        while True:
+            # set up PyTorch buffers
+            init_obs = env.reset()
+            init_obs = buffer_from_example(init_obs, 1)
+            init_act = env.action_space.null_value()
+            init_act = buffer_from_example(init_act, 1)
+            init_prev_reward = np.zeros((1, ), dtype='float32')
+            obs_pyt, act_pyt, prev_rew_pyt = torchify_buffer(
+                (init_obs, init_act, init_prev_reward))
+            slow_frames = 0
+
+            # housekeeping
+            traj_info = MILBenchTrajInfo()
+            agent.reset()
+
+            # pretend it's iteration 0 because it shouldn't matter what
+            # iteration it is (I think that's just used to set epsilon for DQN,
+            # but DQN doesn't seem like it should be training in eval mode)
+            # TODO: on second thought, double-check that DQN really isn't doing
+            # epsilon-greedy exploration in eval mode.
+            agent.eval_mode(0)
+            for t in range(MAX_T):
+                # to regulate FPS
+                frame_start = time.time()
+
+                act_pyt, agent_info = agent.step(obs_pyt, act_pyt,
+                                                 prev_rew_pyt)
+                act_np = numpify_buffer(act_pyt)
+                obs_np = numpify_buffer(obs_pyt)
+                new_obs, new_rew, done, new_env_info = env.step(act_np[0])
+                traj_info.step(obs_np[0], act_np[0], new_rew, done,
+                               agent_info[0], new_env_info)
+                if getattr(new_env_info, "traj_done", done):
+                    traj_info_done = traj_info.terminate(new_obs)
+                    print(f"Trajectory done; score is {traj_info_done.Score} "
+                          f"and base reward is {traj_info_done.BaseReward}")
+                    traj_info = MILBenchTrajInfo()
+                    new_obs = env.reset()
+                if done:
+                    print("Got 'done' flag from environment")
+                    act_pyt[0] = 0  # Prev_action for next step.
+                    new_rew = 0.0
+                    agent.reset_one(idx=0)
+                obs_pyt[0] = torchify_buffer(new_obs)
+                prev_rew_pyt[0] = new_rew
+
+                env.render(mode='human')
+
+                elapsed = time.time() - frame_start
+                sleep_time = max(0, 1. / FPS - elapsed)
+                time.sleep(sleep_time)
+                if sleep_time == 0:
+                    slow_frames += 1
+
+            if slow_frames > MAX_T / 10:
+                print(f"WARNING: below target FPS {slow_frames} slow "
+                      f"frames in this rollout")
+
+    finally:
+        env.close()
 
 
 if __name__ == "__main__":
@@ -156,7 +215,7 @@ if __name__ == "__main__":
     parser.add_argument('--test_pol', default=None, help='test given policy')
     args = parser.parse_args()
     if args.test_pol:
-        test(snapshot_path=args.test_pol)
+        test(snapshot_path=args.test_pol, cuda_idx=args.cuda_idx)
     else:
         build_and_train(
             run_ID=args.run_ID,
