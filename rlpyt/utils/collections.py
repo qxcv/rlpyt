@@ -2,6 +2,7 @@
 import sys
 from collections import namedtuple, OrderedDict
 from inspect import Signature as Sig, Parameter as Param
+import weakref
 
 
 RESERVED_NAMES = ("get", "items")
@@ -214,7 +215,7 @@ class AttrDict(dict):
 
     def __init__(self, *args, **kwargs):
         dict.__init__(self, *args, **kwargs)
-        self.__dict__ = self
+        self.__dict__ = weakref.proxy(self)
 
     def copy(self):
         """
@@ -299,6 +300,10 @@ class NamedTuple(tuple):
         if len(fields) != len(result):
             raise ValueError(f"Expected {len(fields)} arguments, got "
                              f"{len(result)}")
+        if not isinstance(typename, str):
+            raise TypeError(f"typename '{typename}' must be string")
+        if not all(isinstance(f, str) for f in fields):
+            raise TypeError(f"fields '{fields}' must be strings")
         result.__dict__["_typename"] = typename
         result.__dict__["_fields"] = fields
         return result
@@ -343,6 +348,12 @@ class NamedTuple(tuple):
         """Return a nicely formatted string showing the typename."""
         return self._typename + '(' + ', '.join(f'{name}={value}'
             for name, value in zip(self._fields, self)) + ')'
+
+    def __dir__(self):
+        """List all accessible attributes of the NamedTuple."""
+        attrs = list(super().__dir__())
+        attrs.extend(self._fields)
+        return attrs
 
 
 class NamedArrayTupleSchema(NamedTupleSchema):
