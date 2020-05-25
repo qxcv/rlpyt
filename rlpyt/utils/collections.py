@@ -2,7 +2,6 @@
 import sys
 from collections import namedtuple, OrderedDict
 from inspect import Signature as Sig, Parameter as Param
-import weakref
 
 
 RESERVED_NAMES = ("get", "items")
@@ -215,7 +214,7 @@ class AttrDict(dict):
 
     def __init__(self, *args, **kwargs):
         dict.__init__(self, *args, **kwargs)
-        self.__dict__ = weakref.proxy(self)
+        self.__dict__ = self  # XXX ref cycle
 
     def copy(self):
         """
